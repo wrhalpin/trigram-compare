@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bill Halpin
 """
 trigram_compare.py - CLI for binary file trigram similarity analysis.
 
@@ -53,6 +55,7 @@ def blue(t: str) -> str:    return _c("94", t)
 
 
 def _bar(value: float, width: int = 40, color_fn=None) -> str:
+    """Render *value* (0–1) as a filled Unicode block bar with a percentage label."""
     filled = round(value * width)
     bar = "█" * filled + "░" * (width - filled)
     pct = f" {value * 100:5.1f}%"
@@ -62,6 +65,7 @@ def _bar(value: float, width: int = 40, color_fn=None) -> str:
 
 
 def _verdict_color(verdict: str) -> str:
+    """Apply ANSI color to a verdict string: red for high risk, yellow for moderate, green for low."""
     if "IDENTICAL" in verdict or "HIGHLY" in verdict or "EMBEDDED" in verdict:
         return red(verdict)
     if "SHARED CODE" in verdict or "MODERATE" in verdict:
@@ -72,6 +76,7 @@ def _verdict_color(verdict: str) -> str:
 
 
 def _human_size(n: int) -> str:
+    """Convert a byte count to a human-readable string (e.g. ``8.0 KB``)."""
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
             return f"{n:.1f} {unit}"
@@ -84,6 +89,13 @@ def render_report(
     show_hotspots: int = 10,
     show_coverage: bool = True,
 ) -> None:
+    """Print a formatted, ANSI-coloured similarity report to stdout.
+
+    Args:
+        report: The ``SimilarityReport`` returned by ``TrigramIndex.compare()``.
+        show_hotspots: Maximum number of hotspot rows to display (0 to suppress).
+        show_coverage: Whether to print the coverage map section.
+    """
     w = 70
     line = "─" * w
 
@@ -180,6 +192,7 @@ def render_report(
 
 
 def report_to_dict(report: SimilarityReport) -> dict:
+    """Serialize a ``SimilarityReport`` to a JSON-compatible dictionary."""
     return {
         "files": {
             "a": {
@@ -233,6 +246,7 @@ def report_to_dict(report: SimilarityReport) -> dict:
 
 
 def main() -> None:
+    """Parse CLI arguments, run the comparison, and print results."""
     parser = argparse.ArgumentParser(
         description="Binary file trigram similarity analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -1,0 +1,50 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Project Does
+
+`trigram-compare` detects structural similarity between binary files using 3-byte n-gram (trigram) analysis. It identifies polymorphic variants, embedded payloads, and shared code regions without requiring format-specific parsers.
+
+## Running the Tool
+
+```bash
+# Basic comparison
+python3 trigram_compare.py file_a file_b
+
+# JSON output (pipeline-friendly)
+python3 trigram_compare.py --json file_a file_b
+
+# Tune sensitivity
+python3 trigram_compare.py --window 512 --threshold 0.15 file_a file_b
+
+# Generate synthetic test binaries (creates testdata/)
+python3 gen_testdata.py
+```
+
+There is no build step, test runner, or linter configured. The project is pure Python stdlib — no packages to install.
+
+## Architecture
+
+Two modules; one is a pure library, the other is CLI glue:
+
+**`trigram_index.py`** — engine and data model, no I/O side effects
+- `TrigramIndex` — builds `dict[int, list[int]]` (trigram packed as 24-bit int → sorted byte offsets) via mmap. Call `.build()` then `.compare(other)`.
+- `compare()` computes Jaccard, cosine, and containment scores, then delegates to `_find_hotspots()` and `_build_coverage_map()`.
+- `_find_hotspots()` — grids all (offset_a, offset_b) pairs for shared trigrams into window-sized cells; dense cells become `Hotspot` objects. Skips trigrams with >10,000 offset pairs to avoid O(n²) blowup.
+- `_build_coverage_map()` — slides a window over file A counting shared trigrams; produces `CoverageSegment` objects, then merges overlapping segments via `_merge_coverage_segments()`.
+- `SimilarityReport.verdict` — derived property that classifies the result using Jaccard and containment thresholds.
+
+**`trigram_compare.py`** — CLI and rendering only, imports everything from `trigram_index`
+- `render_report()` — pretty-prints the report with ANSI color
+- `report_to_dict()` — serializes a `SimilarityReport` to a JSON-compatible dict
+- `main()` — argument parsing, file validation, timing, output dispatch
+
+**`gen_testdata.py`** — standalone script to generate `testdata/` with four synthetic binaries covering the main similarity scenarios (near-identical, embedded, dissimilar).
+
+## Key Design Decisions
+
+- Trigrams are stored as `int` keys (`(b0 << 16) | (b1 << 8) | b2`) rather than `bytes` for ~2× speed.
+- `_build_coverage_map` uses the median of all matched B-offsets in a window to anchor the corresponding B-side range — this is an approximation, not an exact alignment.
+- `coverage_window` defaults to `4 × hotspot_window`; `coverage_min_density` defaults to `0.6 × hotspot_min_density`. These ratios are baked into `main()`.
+- Hotspots are capped at 50; coverage segments at 20. `verdict` reads only `hotspots[0]`.

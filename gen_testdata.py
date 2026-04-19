@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bill Halpin
 """
 Generate test binary files to demonstrate trigram comparison:
 
@@ -16,6 +18,7 @@ rng = random.Random(42)
 
 
 def write(path: str, data: bytes) -> None:
+    """Write *data* to *path* in binary mode and print the resulting file size."""
     with open(path, "wb") as f:
         f.write(data)
     print(f"  wrote {path} ({len(data):,} bytes)")

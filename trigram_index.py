@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bill Halpin
+
 """
 trigram_index.py - Core trigram analysis engine for binary file comparison.
 Detects embedded code, polymorphism, and structural similarity via 3-byte ngrams.
@@ -69,6 +72,17 @@ class SimilarityReport:
 
     @property
     def verdict(self) -> str:
+        """Classify the comparison result as a human-readable verdict string.
+
+        Thresholds are evaluated in order; the first match wins:
+          jaccard >= 0.85  -> NEAR-IDENTICAL
+          jaccard >= 0.50  -> HIGHLY SIMILAR
+          containment >= 0.70 (either direction) -> EMBEDDED CONTENT LIKELY
+          hotspots[0].trigram_count >= 64 -> SHARED CODE REGION DETECTED
+          jaccard >= 0.15  -> MODERATE SIMILARITY
+          jaccard >= 0.05  -> LOW SIMILARITY
+          otherwise        -> DISSIMILAR
+        """
         j = self.jaccard
         ca = self.containment_a_in_b
         cb = self.containment_b_in_a
@@ -129,13 +143,21 @@ class TrigramIndex:
 
     @property
     def total_trigrams(self) -> int:
+        """Total trigram count including duplicates; equals max(0, size - 2)."""
         return max(0, self.size - 2)
 
     @property
     def unique_trigrams(self) -> int:
+        """Number of distinct 3-byte sequences observed in the file."""
         return len(self._index)
 
     def offsets(self, trigram: bytes | int) -> list[int]:
+        """Return all byte offsets where *trigram* occurs.
+
+        *trigram* may be a 3-byte ``bytes`` object or a pre-packed 24-bit int
+        ``(b0 << 16) | (b1 << 8) | b2``.  Returns an empty list if the trigram
+        is not present.
+        """
         if isinstance(trigram, bytes):
             key = (trigram[0] << 16) | (trigram[1] << 8) | trigram[2]
         else:
@@ -143,6 +165,7 @@ class TrigramIndex:
         return self._index.get(key, [])
 
     def keys(self) -> set[int]:
+        """Return the set of all unique trigrams in the file as packed 24-bit ints."""
         return set(self._index.keys())
 
     # ------------------------------------------------------------------
@@ -201,6 +224,12 @@ class TrigramIndex:
     # ------------------------------------------------------------------
 
     def _cosine_similarity(self, other: TrigramIndex, shared_keys: set[int]) -> float:
+        """Compute frequency-weighted cosine similarity over the full trigram vocabulary.
+
+        Treats each file as a vector of trigram occurrence counts and returns the
+        normalised dot product.  Returns 0.0 when there are no shared trigrams or
+        either file is empty.
+        """
         if not shared_keys:
             return 0.0
 

@@ -385,19 +385,34 @@ class TrigramIndex:
                 ))
 
         segments.sort(key=lambda s: s.start_a)
-        merged = _merge_coverage_segments(segments)
+        merged = _merge_coverage_segments(segments, max_b_gap=window)
         merged.sort(key=lambda s: s.density, reverse=True)
         return merged[:20]
 
 
-def _merge_coverage_segments(segs: list[CoverageSegment]) -> list[CoverageSegment]:
-    """Merge overlapping CoverageSegments, keeping the highest density."""
+def _merge_coverage_segments(
+    segs: list[CoverageSegment], max_b_gap: int
+) -> list[CoverageSegment]:
+    """Merge CoverageSegments that overlap in A *and* map to consistent B ranges.
+
+    Segments whose B ranges are separated by more than *max_b_gap* bytes are
+    kept apart even when their A ranges overlap: adjacent A windows matching
+    two distant regions of B are two distinct matches, and unioning their B
+    ranges would fabricate a span covering everything in between.
+
+    Expects *segs* sorted by ``start_a``. Merged segments keep the highest
+    density of their parts.
+    """
     if not segs:
         return []
     result = [segs[0]]
     for s in segs[1:]:
         prev = result[-1]
-        if s.start_a <= prev.end_a:
+        b_consistent = (
+            s.start_b <= prev.end_b + max_b_gap
+            and s.end_b >= prev.start_b - max_b_gap
+        )
+        if s.start_a <= prev.end_a and b_consistent:
             result[-1] = CoverageSegment(
                 start_a=prev.start_a,
                 end_a=max(prev.end_a, s.end_a),

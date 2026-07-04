@@ -77,6 +77,8 @@ Matching is multiset-based: each trigram occurrence in the window can match at m
 
 The B-side position reported for each segment is an approximation: the median offset of all B-side occurrences of the shared trigrams. For an exactly aligned region this median converges to the true alignment offset; for scattered matches it is less precise.
 
+Overlapping windows are merged into a single segment only when their B ranges are also consistent (within one window of each other). Adjacent A windows that match two distant regions of B stay separate segments — unioning their B ranges would fabricate a span covering everything in between.
+
 ## Verdict logic
 
 The verdict is a convenience classification. The thresholds are heuristics tuned for typical malware analysis scenarios:

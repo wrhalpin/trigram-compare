@@ -110,6 +110,22 @@ class TestCoverageSaturation(TrigramTestCase):
             self.assertLess(seg.start_a, 4096)
 
 
+class TestSegmentMerging(TrigramTestCase):
+    def test_distinct_b_regions_stay_separate(self):
+        # Bug regression: merging used to union B ranges of any A-overlapping
+        # segments, so two adjacent A regions matching distant regions of B
+        # collapsed into one segment spanning most of B.
+        x = self._rand(2048)
+        y = self._rand(2048)
+        a = x + y                                  # A: X then Y, contiguous
+        b = x + self._rand(16384) + y              # B: X ... 16KB gap ... Y
+        r = self._compare(a, b, coverage_window=1024, coverage_min_density=0.5)
+        self.assertGreaterEqual(len(r.coverage_segments), 2)
+        for seg in r.coverage_segments:
+            # No segment may span from the X match to the Y match in B
+            self.assertLessEqual(seg.size_b, 8192)
+
+
 class TestEmbeddedPayload(TrigramTestCase):
     def test_embedded_chunk_still_detected(self):
         # Behaviour guard: the main use case must survive the fixes.

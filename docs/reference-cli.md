@@ -50,6 +50,7 @@ python3 trigram_compare.py <file_a> <file_b> [options]
     "unique_to_b": int
   },
   "verdict": "string",
+  "sampled_trigrams": int,
   "hotspots": [
     { "offset_a": int, "offset_b": int, "length": int, "trigram_count": int, "density": float }
   ],
@@ -114,6 +115,7 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `containment_b_in_a` | `float` | `shared / unique_b` |
 | `hotspots` | `list[Hotspot]` | Sorted by `trigram_count` descending, capped at 50 |
 | `coverage_segments` | `list[CoverageSegment]` | Sorted by `density` descending, capped at 20 |
+| `sampled_trigrams` | `int` | Number of shared trigram values subsampled during hotspot analysis because their offset cross-product exceeded 10,000 pairs |
 | `verdict` | `str` (property) | Classification string (see below) |
 
 **Verdict thresholds** (evaluated in order):
@@ -140,6 +142,8 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `trigram_count` | `int` | Number of *distinct positions* in this A window whose trigram also occurs in the corresponding B window |
 
 Density = `trigram_count / length`, always in `[0, 1]`. Repeated substrings do not inflate the count: each A position is counted once per cell regardless of how many B occurrences it matches.
+
+Trigram values with more than 10,000 offset pairs are deterministically subsampled to 100 evenly-strided offsets per side, so heavily repeated shared content still registers — at reduced density. The number of subsampled values is reported in `sampled_trigrams`.
 
 ---
 

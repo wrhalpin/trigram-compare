@@ -151,7 +151,10 @@ def render_report(
 
     if report.hotspots and show_hotspots > 0:
         print()
-        print(bold("HOTSPOTS") + dim(f"  (top {min(show_hotspots, len(report.hotspots))} dense matching regions)"))
+        note = f"  (top {min(show_hotspots, len(report.hotspots))} dense matching regions)"
+        if report.sampled_trigrams:
+            note += f"  ({report.sampled_trigrams} high-frequency trigrams sampled)"
+        print(bold("HOTSPOTS") + dim(note))
         print()
         print(f"  {'#':>3}  {'Offset A':>10}  {'Offset B':>10}  {'~Size':>8}  {'Trigrams':>9}  {'Density':>8}")
         print(f"  {'─'*3}  {'─'*10}  {'─'*10}  {'─'*8}  {'─'*9}  {'─'*8}")
@@ -218,6 +221,7 @@ def report_to_dict(report: SimilarityReport) -> dict:
             "unique_to_b": report.unique_trigrams_b - report.shared_trigrams,
         },
         "verdict": report.verdict,
+        "sampled_trigrams": report.sampled_trigrams,
         "hotspots": [
             {
                 "offset_a": h.offset_a,

@@ -110,6 +110,30 @@ class TestCoverageSaturation(TrigramTestCase):
             self.assertLess(seg.start_a, 4096)
 
 
+class TestHighFrequencySampling(TrigramTestCase):
+    def test_repetitive_shared_block_still_registers(self):
+        # Bug regression: trigrams with >10,000 offset pairs used to be
+        # skipped outright, so a large repeated shared block (tiled pattern,
+        # padding run, jump table) produced no hotspot at all.
+        pattern = self._rand(16) * 256  # 4 KB: ~16 trigram values x 256 occurrences
+        a = self._rand(2048) + pattern + self._rand(2048)
+        b = self._rand(2048) + pattern + self._rand(2048)
+        r = self._compare(a, b)
+        self.assertGreater(r.sampled_trigrams, 0)
+        self.assertTrue(r.hotspots, "repetitive shared block must produce a hotspot")
+
+    def test_sampling_is_deterministic(self):
+        pattern = self._rand(16) * 256
+        a = self._rand(2048) + pattern + self._rand(2048)
+        b = self._rand(2048) + pattern + self._rand(2048)
+        r1 = self._compare(a, b)
+        r2 = self._compare(a, b)
+        self.assertEqual(
+            [(h.offset_a, h.offset_b, h.trigram_count) for h in r1.hotspots],
+            [(h.offset_a, h.offset_b, h.trigram_count) for h in r2.hotspots],
+        )
+
+
 class TestSegmentMerging(TrigramTestCase):
     def test_distinct_b_regions_stay_separate(self):
         # Bug regression: merging used to union B ranges of any A-overlapping

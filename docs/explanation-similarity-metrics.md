@@ -67,7 +67,7 @@ For each shared trigram, every (offset_in_A, offset_in_B) pair is bucketed into 
 
 Each cell counts *distinct A positions* that matched, not raw offset pairs. This matters for repeated content: if a string occurs twice in each file, every one of its trigrams produces four offset pairs, but each A position is still only counted once. Density is `count / window` and always falls in [0, 1]; the default threshold of 0.25 means at least one matched position per 4 bytes across the window.
 
-High-frequency trigrams (more than 10,000 offset combinations) are skipped to prevent O(n²) blowup. This means very common byte patterns like `\x00\x00\x00` do not contribute to hotspots even if they are theoretically shared.
+High-frequency trigrams (more than 10,000 offset combinations) are deterministically subsampled to 100 evenly-strided offsets per side, bounding the work per trigram while still letting heavily repeated shared content — tiled patterns, padding runs, jump tables — register in the grid at reduced density. The report discloses how many trigram values were subsampled (`sampled_trigrams`), so bounded analysis is never silent.
 
 ### Coverage map (file-A perspective)
 
@@ -98,4 +98,4 @@ Because verdicts are evaluated in order, a file pair can only receive one label 
 
 **Very small files**: files under ~300 bytes have fewer than 256 trigrams total. The hotspot grid will have at most one populated cell regardless of content.
 
-**Incidental trigram sharing**: some trigrams (especially null runs, common instruction prefixes) occur in almost every binary. The hotspot algorithm already skips the most degenerate cases; the rest contribute noise at low density levels.
+**Incidental trigram sharing**: some trigrams (especially null runs, common instruction prefixes) occur in almost every binary. The hotspot algorithm subsamples the most degenerate cases, and the coverage map's multiset matching bounds their contribution; the rest contribute noise at low density levels.

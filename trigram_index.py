@@ -68,6 +68,9 @@ class SimilarityReport:
     containment_b_in_a: float     # what fraction of B's trigrams appear in A
     hotspots: list[Hotspot] = field(default_factory=list)
     coverage_segments: list[CoverageSegment] = field(default_factory=list)
+    # Shared trigram values whose offsets were subsampled during hotspot
+    # analysis because they exceeded the pair budget (see _find_hotspots)
+    sampled_trigrams: int = 0
 
     @property
     def verdict(self) -> str:
@@ -105,6 +108,22 @@ class SimilarityReport:
         if j >= 0.05:
             return "LOW SIMILARITY"
         return "DISSIMILAR"
+
+
+# Hotspot analysis bounds the work done per shared trigram: values whose
+# offset cross-product exceeds the budget are subsampled to CAP evenly-strided
+# offsets per side (CAP² == budget, so sampled trigrams stay within it).
+_HOTSPOT_PAIR_BUDGET = 10_000
+_HOTSPOT_SAMPLE_CAP = 100
+
+
+def _sample_offsets(offs: list[int], cap: int = _HOTSPOT_SAMPLE_CAP) -> list[int]:
+    """Deterministically subsample *offs* to at most *cap* evenly-strided entries."""
+    n = len(offs)
+    if n <= cap:
+        return offs
+    stride = n / cap
+    return [offs[int(i * stride)] for i in range(cap)]
 
 
 class TrigramIndex:
@@ -214,7 +233,7 @@ class TrigramIndex:
         containment_ba = shared / len(keys_b) if keys_b else 0.0
 
         cosine = self._cosine_similarity(other, intersection, union)
-        hotspots = self._find_hotspots(other, intersection, hotspot_window, hotspot_min_density)
+        hotspots, sampled = self._find_hotspots(other, intersection, hotspot_window, hotspot_min_density)
         coverage = self._build_coverage_map(other, intersection, coverage_window, coverage_min_density)
 
         return SimilarityReport(
@@ -233,6 +252,7 @@ class TrigramIndex:
             containment_b_in_a=containment_ba,
             hotspots=hotspots,
             coverage_segments=coverage,
+            sampled_trigrams=sampled,
         )
 
     # ------------------------------------------------------------------
@@ -272,7 +292,7 @@ class TrigramIndex:
         shared_keys: set[int],
         window: int,
         min_density: float,
-    ) -> list[Hotspot]:
+    ) -> tuple[list[Hotspot], int]:
         """
         Bucket (offset_a, offset_b) pairs for each shared trigram into a grid
         of window-sized cells. Dense cells become Hotspot objects.
@@ -280,18 +300,28 @@ class TrigramIndex:
         Each cell counts *distinct A positions* matched to that B cell, so a
         substring repeated in both files cannot inflate the count beyond the
         number of bytes actually shared, and density stays in [0, 1].
+
+        High-frequency trigrams whose offset cross-product exceeds the pair
+        budget are subsampled (evenly strided, deterministic) rather than
+        skipped, so heavily repeated shared content still registers in the
+        grid — at reduced density. Returns (hotspots, sampled_count) where
+        sampled_count is the number of trigram values that were subsampled.
         """
         if not shared_keys:
-            return []
+            return [], 0
 
         grid: dict[tuple[int, int], set[int]] = defaultdict(set)
+        sampled = 0
 
         for k in shared_keys:
             offsets_a = self._index[k]
             offsets_b = other._index[k]
-            # Skip high-frequency trigrams (e.g. 0x000000) to avoid O(n²) blowup
-            if len(offsets_a) * len(offsets_b) > 10_000:
-                continue
+            # Bound the per-trigram work for high-frequency values
+            # (e.g. 0x000000) to avoid O(n²) blowup
+            if len(offsets_a) * len(offsets_b) > _HOTSPOT_PAIR_BUDGET:
+                sampled += 1
+                offsets_a = _sample_offsets(offsets_a)
+                offsets_b = _sample_offsets(offsets_b)
             for oa in offsets_a:
                 for ob in offsets_b:
                     grid[(oa // window, ob // window)].add(oa)
@@ -308,7 +338,7 @@ class TrigramIndex:
                 ))
 
         hotspots.sort(key=lambda h: h.trigram_count, reverse=True)
-        return hotspots[:50]
+        return hotspots[:50], sampled
 
     def _build_coverage_map(
         self,

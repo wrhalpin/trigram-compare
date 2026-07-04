@@ -73,8 +73,10 @@ class SimilarityReport:
     # Shared trigram values whose offsets were subsampled during hotspot
     # analysis because they exceeded the pair budget (see _find_hotspots)
     sampled_trigrams: int = 0
-    # How hotspot analysis ran: "full" (exact), or "budget_scaled" (per-
-    # trigram sampling was tightened so total work fit the global budget)
+    # How hotspot analysis ran: "full" (exact), "budget_scaled" (sampling
+    # tightened so total work fit the global budget), or
+    # "near_identical_sample" (sparse sample; Jaccard already decided the
+    # verdict and dense matches blanket the grid)
     hotspot_analysis: str = "full"
 
     @property
@@ -122,12 +124,18 @@ _HOTSPOT_PAIR_BUDGET = 10_000
 _HOTSPOT_SAMPLE_CAP = 100
 
 # Total work across all shared trigrams is additionally capped: when the
-# estimated pair count exceeds this, the per-trigram budget is scaled down
-# proportionally (still evenly strided and deterministic) and the report is
+# estimated pair count exceeds this, every trigram's offsets are capped at
+# sqrt(budget / shared_keys) per side (evenly strided, deterministic) and
+# sampled increments are weighted by the inverse sampling rate so cell
+# counts remain unbiased estimates of the exact values. The report is
 # labelled "budget_scaled". Keeps huge repetitive near-duplicate pairs from
 # taking minutes/GBs, at the cost of coarser hotspots — never silently.
 _HOTSPOT_GLOBAL_BUDGET = 20_000_000
-_HOTSPOT_MIN_PAIR_BUDGET = 400  # floor: at least 20x20 pairs per heavy trigram
+
+# When Jaccard alone already decides the verdict (NEAR-IDENTICAL at >= 0.85),
+# hotspots are supplementary — "everything matches everywhere" — so analysis
+# runs under a much smaller budget and is labelled "near_identical_sample".
+_HOTSPOT_NEAR_IDENTICAL_BUDGET = 2_000_000
 
 
 def _sample_offsets(offs: Sequence[int], cap: int = _HOTSPOT_SAMPLE_CAP) -> Sequence[int]:
@@ -259,7 +267,22 @@ class TrigramIndex:
         containment_ba = shared / len(keys_b) if keys_b else 0.0
 
         cosine = self._cosine_similarity(other, intersection)
-        hotspots, sampled, scaled = self._find_hotspots(other, intersection, hotspot_window, hotspot_min_density)
+
+        # Near-identical pairs: Jaccard alone decides the verdict and dense
+        # matches blanket the grid, so hotspots run on a sparse sample.
+        # Constants are read at call time so tests can patch them.
+        near_identical = jaccard >= 0.85
+        budget = _HOTSPOT_NEAR_IDENTICAL_BUDGET if near_identical else _HOTSPOT_GLOBAL_BUDGET
+        hotspots, sampled, scaled = self._find_hotspots(
+            other, intersection, hotspot_window, hotspot_min_density,
+            global_budget=budget,
+        )
+        if not scaled:
+            analysis = "full"
+        elif near_identical:
+            analysis = "near_identical_sample"
+        else:
+            analysis = "budget_scaled"
         coverage = self._build_coverage_map(other, intersection, coverage_window, coverage_min_density)
 
         return SimilarityReport(
@@ -279,7 +302,7 @@ class TrigramIndex:
             hotspots=hotspots,
             coverage_segments=coverage,
             sampled_trigrams=sampled,
-            hotspot_analysis="budget_scaled" if scaled else "full",
+            hotspot_analysis=analysis,
         )
 
     # ------------------------------------------------------------------
@@ -315,6 +338,7 @@ class TrigramIndex:
         shared_keys: Collection[int],
         window: int,
         min_density: float,
+        global_budget: int = _HOTSPOT_GLOBAL_BUDGET,
     ) -> tuple[list[Hotspot], int, bool]:
         """
         Bucket (offset_a, offset_b) pairs for each shared trigram into a grid
@@ -332,9 +356,11 @@ class TrigramIndex:
         budget are subsampled (evenly strided, deterministic) rather than
         skipped, so heavily repeated shared content still registers in the
         grid — at reduced density. When the estimated total pair count
-        across all shared trigrams exceeds _HOTSPOT_GLOBAL_BUDGET, the
-        per-trigram budget is scaled down proportionally so overall work
-        stays bounded regardless of input size.
+        across all shared trigrams exceeds *global_budget*, every trigram's
+        offsets are capped at sqrt(global_budget / shared_keys) per side and
+        sampled increments are weighted by the inverse sampling rate, so
+        overall work stays bounded regardless of input size while cell
+        counts remain unbiased estimates of the exact values.
 
         Returns (hotspots, sampled_count, budget_scaled) where sampled_count
         is the number of subsampled trigram values and budget_scaled is True
@@ -343,20 +369,24 @@ class TrigramIndex:
         if not shared_keys:
             return [], 0, False
 
-        # Estimate total work as if only the per-trigram budget applied;
-        # tighten that budget proportionally when the estimate exceeds the
-        # global budget. Low-frequency trigrams stay exact either way.
-        pair_budget = _HOTSPOT_PAIR_BUDGET
+        # Estimate total work as if only the per-trigram budget applied. When
+        # it exceeds the global budget, derive a per-key cap from an even
+        # split of the budget across shared keys — scaling must reach the
+        # *many-medium-keys* regime (e.g. a million trigrams at ~300 pairs
+        # each), not just the few heavy ones. Keys under cap² stay exact.
         estimated = 0
         for k in shared_keys:
             estimated += min(
                 len(self._index[k]) * len(other._index[k]), _HOTSPOT_PAIR_BUDGET
             )
-        scaled = estimated > _HOTSPOT_GLOBAL_BUDGET
+        scaled = estimated > global_budget
         if scaled:
-            scale = _HOTSPOT_GLOBAL_BUDGET / estimated
-            pair_budget = max(_HOTSPOT_MIN_PAIR_BUDGET, int(_HOTSPOT_PAIR_BUDGET * scale))
-        cap = max(1, int(pair_budget ** 0.5))
+            per_key = max(1, global_budget // len(shared_keys))
+            cap = min(_HOTSPOT_SAMPLE_CAP, max(2, int(per_key ** 0.5)))
+            pair_budget = cap * cap
+        else:
+            cap = _HOTSPOT_SAMPLE_CAP
+            pair_budget = _HOTSPOT_PAIR_BUDGET
 
         # Cells are keyed by a single packed int (ca * ncols + cb) rather
         # than a tuple: ~40% less memory per entry and faster hashing
@@ -371,16 +401,25 @@ class TrigramIndex:
             # (e.g. 0x000000) to avoid O(n²) blowup
             if len(offsets_a) * len(offsets_b) > pair_budget:
                 sampled += 1
+                full_a = len(offsets_a)
                 offsets_a = _sample_offsets(offsets_a, cap)
                 offsets_b = _sample_offsets(offsets_b, cap)
+                # Weight by the inverse A-side sampling rate so counts stay
+                # unbiased estimates of the exact distinct-position counts
+                weight = full_a / len(offsets_a)
+            else:
+                weight = 1
             b_cells = {ob // window for ob in offsets_b}
             for oa in offsets_a:
                 row = (oa // window) * ncols
                 for cb in b_cells:
-                    grid[row + cb] += 1
+                    grid[row + cb] += weight
 
         hotspots: list[Hotspot] = []
         for cell, count in grid.items():
+            # Clamp the estimate: true distinct-position counts can never
+            # exceed the window, so density stays in [0, 1] under sampling
+            count = min(int(round(count)), window)
             if count / window >= min_density:
                 ca, cb = divmod(cell, ncols)
                 hotspots.append(Hotspot(

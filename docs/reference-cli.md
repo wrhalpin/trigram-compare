@@ -117,7 +117,7 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `hotspots` | `list[Hotspot]` | Sorted by `trigram_count` descending, capped at 50 |
 | `coverage_segments` | `list[CoverageSegment]` | Sorted by `density` descending, capped at 20 |
 | `sampled_trigrams` | `int` | Number of shared trigram values subsampled during hotspot analysis because their offset cross-product exceeded the per-trigram pair budget |
-| `hotspot_analysis` | `str` | `"full"` when hotspot analysis was exact; `"budget_scaled"` when the per-trigram sampling budget was tightened so total work fit the ~20M-pair global budget (very large, repetitive inputs) |
+| `hotspot_analysis` | `str` | `"full"` when hotspot analysis was exact; `"budget_scaled"` when sampling was tightened so total work fit the ~20M-pair global budget (very large, repetitive inputs); `"near_identical_sample"` when Jaccard ≥ 0.85 already decided the verdict and hotspots ran on a sparse sample |
 | `verdict` | `str` (property) | Classification string (see below) |
 
 **Verdict thresholds** (evaluated in order):

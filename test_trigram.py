@@ -168,6 +168,23 @@ class TestGlobalBudget(TrigramTestCase):
         )
 
 
+class TestNearIdenticalSampling(TrigramTestCase):
+    def test_small_near_identical_pairs_stay_exact(self):
+        # Small identical files fit even the reduced budget: no sampling
+        data = self._rand(8192)
+        r = self._compare(data, data)
+        self.assertEqual(r.verdict, "NEAR-IDENTICAL")
+        self.assertEqual(r.hotspot_analysis, "full")
+
+    def test_large_near_identical_pairs_use_sparse_sample(self):
+        data = self._rand(8192)
+        with mock.patch("trigram_index._HOTSPOT_NEAR_IDENTICAL_BUDGET", 1_000):
+            r = self._compare(data, data)
+        self.assertEqual(r.verdict, "NEAR-IDENTICAL")
+        self.assertEqual(r.hotspot_analysis, "near_identical_sample")
+        self.assertTrue(r.hotspots)
+
+
 class TestGridEquivalence(TrigramTestCase):
     def test_counter_grid_matches_set_based_reference(self):
         # The counter-based grid must produce cell counts identical to the

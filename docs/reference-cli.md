@@ -51,6 +51,7 @@ python3 trigram_compare.py <file_a> <file_b> [options]
   },
   "verdict": "string",
   "sampled_trigrams": int,
+  "hotspot_analysis": "string",
   "hotspots": [
     { "offset_a": int, "offset_b": int, "length": int, "trigram_count": int, "density": float }
   ],
@@ -115,7 +116,8 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `containment_b_in_a` | `float` | `shared / unique_b` |
 | `hotspots` | `list[Hotspot]` | Sorted by `trigram_count` descending, capped at 50 |
 | `coverage_segments` | `list[CoverageSegment]` | Sorted by `density` descending, capped at 20 |
-| `sampled_trigrams` | `int` | Number of shared trigram values subsampled during hotspot analysis because their offset cross-product exceeded 10,000 pairs |
+| `sampled_trigrams` | `int` | Number of shared trigram values subsampled during hotspot analysis because their offset cross-product exceeded the per-trigram pair budget |
+| `hotspot_analysis` | `str` | `"full"` when hotspot analysis was exact; `"budget_scaled"` when the per-trigram sampling budget was tightened so total work fit the ~20M-pair global budget (very large, repetitive inputs) |
 | `verdict` | `str` (property) | Classification string (see below) |
 
 **Verdict thresholds** (evaluated in order):

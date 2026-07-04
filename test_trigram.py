@@ -16,6 +16,7 @@ import random
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from trigram_index import TrigramIndex
 
@@ -134,6 +135,39 @@ class TestHighFrequencySampling(TrigramTestCase):
         )
 
 
+class TestGlobalBudget(TrigramTestCase):
+    def test_below_budget_reports_full_analysis(self):
+        shared = self._rand(600)
+        a = self._rand(3000) + shared + self._rand(3000)
+        b = self._rand(3000) + shared + self._rand(3000)
+        r = self._compare(a, b)
+        self.assertEqual(r.hotspot_analysis, "full")
+
+    def test_budget_scaling_engages_and_discloses(self):
+        pattern = self._rand(64) * 64  # 4 KB: ~64 keys x 64 occurrences each
+        a = self._rand(2048) + pattern + self._rand(2048)
+        b = self._rand(2048) + pattern + self._rand(2048)
+        with mock.patch("trigram_index._HOTSPOT_GLOBAL_BUDGET", 5_000):
+            r = self._compare(a, b)
+        self.assertEqual(r.hotspot_analysis, "budget_scaled")
+        # Scaled analysis must still locate the shared region
+        self.assertTrue(r.hotspots)
+        top = r.hotspots[0]
+        self.assertTrue(2048 - 256 <= top.offset_a <= 2048 + 4096)
+
+    def test_scaled_analysis_is_deterministic(self):
+        pattern = self._rand(64) * 64
+        a = self._rand(2048) + pattern + self._rand(2048)
+        b = self._rand(2048) + pattern + self._rand(2048)
+        with mock.patch("trigram_index._HOTSPOT_GLOBAL_BUDGET", 5_000):
+            r1 = self._compare(a, b)
+            r2 = self._compare(a, b)
+        self.assertEqual(
+            [(h.offset_a, h.offset_b, h.trigram_count) for h in r1.hotspots],
+            [(h.offset_a, h.offset_b, h.trigram_count) for h in r2.hotspots],
+        )
+
+
 class TestGridEquivalence(TrigramTestCase):
     def test_counter_grid_matches_set_based_reference(self):
         # The counter-based grid must produce cell counts identical to the
@@ -156,7 +190,7 @@ class TestGridEquivalence(TrigramTestCase):
                 for ob in offs_b:
                     reference.setdefault((oa // window, ob // window), set()).add(oa)
 
-        hotspots, _ = ia._find_hotspots(ib, shared, window, min_density=0.05)
+        hotspots, _, _ = ia._find_hotspots(ib, shared, window, min_density=0.05)
         expected = {
             (ca, cb): len(s) for (ca, cb), s in reference.items()
             if len(s) / window >= 0.05

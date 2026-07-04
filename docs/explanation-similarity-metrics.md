@@ -69,6 +69,8 @@ Each cell counts *distinct A positions* that matched, not raw offset pairs. This
 
 High-frequency trigrams (more than 10,000 offset combinations) are deterministically subsampled to 100 evenly-strided offsets per side, bounding the work per trigram while still letting heavily repeated shared content — tiled patterns, padding runs, jump tables — register in the grid at reduced density. The report discloses how many trigram values were subsampled (`sampled_trigrams`), so bounded analysis is never silent.
 
+Total hotspot work is also bounded globally: when the estimated pair count across all shared trigrams exceeds ~20 million (very large, repetitive inputs), the per-trigram budget is scaled down proportionally and the report is labelled `hotspot_analysis: "budget_scaled"`. Low-frequency trigrams remain exact; only the heavy ones get coarser.
+
 ### Coverage map (file-A perspective)
 
 The coverage map slides a window over file A and asks: "what fraction of the trigrams in this window appear anywhere in file B?" It is a coarser, one-dimensional view compared to hotspots. A final window is always placed flush with the end of file A, so the tail is examined even when the file size is not a multiple of the step.

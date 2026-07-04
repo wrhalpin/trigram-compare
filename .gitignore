@@ -1,3 +1,9 @@
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Generated test fixtures (recreate with: python3 gen_testdata.py)
 testdata/

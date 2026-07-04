@@ -72,6 +72,12 @@ python3 gen_testdata.py
 # Creates testdata/base.bin, similar.bin, embedded.bin, unrelated.bin
 ```
 
+Run the regression tests (stdlib `unittest`, no test data required):
+
+```bash
+python3 -m unittest test_trigram.py -v
+```
+
 ## Documentation
 
 | Document | Description |

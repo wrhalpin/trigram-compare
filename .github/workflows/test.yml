@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Bill Halpin
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run unit tests
+        run: python -m unittest test_trigram.py -v
+      - name: CLI smoke test
+        run: |
+          python gen_testdata.py
+          python trigram_compare.py --json testdata/base.bin testdata/similar.bin > /dev/null
+          python trigram_compare.py --no-color testdata/base.bin testdata/embedded.bin > /dev/null

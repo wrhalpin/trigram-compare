@@ -143,7 +143,7 @@ def render_report(
     print(f"  Containment A\u2192B          {_bar(report.containment_a_in_b, 38, bar_color(report.containment_a_in_b))}")
     print(f"  Containment B\u2192A          {_bar(report.containment_b_in_a, 38, bar_color(report.containment_b_in_a))}")
     print()
-    print(f"  Shared unique trigrams:  {bold(str(report.shared_trigrams)):>8}")
+    print(f"  Shared unique trigrams:  {bold(f'{report.shared_trigrams:>8}')}")
     print(f"  Only in A:               {str(report.unique_trigrams_a - report.shared_trigrams):>8}")
     print(f"  Only in B:               {str(report.unique_trigrams_b - report.shared_trigrams):>8}")
     print()
@@ -151,7 +151,10 @@ def render_report(
 
     if report.hotspots and show_hotspots > 0:
         print()
-        print(bold("HOTSPOTS") + dim(f"  (top {min(show_hotspots, len(report.hotspots))} dense matching regions)"))
+        note = f"  (top {min(show_hotspots, len(report.hotspots))} dense matching regions)"
+        if report.sampled_trigrams:
+            note += f"  ({report.sampled_trigrams} high-frequency trigrams sampled)"
+        print(bold("HOTSPOTS") + dim(note))
         print()
         print(f"  {'#':>3}  {'Offset A':>10}  {'Offset B':>10}  {'~Size':>8}  {'Trigrams':>9}  {'Density':>8}")
         print(f"  {'─'*3}  {'─'*10}  {'─'*10}  {'─'*8}  {'─'*9}  {'─'*8}")
@@ -164,7 +167,7 @@ def render_report(
                 f"0x{hs.offset_b:08x}  "
                 f"{_human_size(hs.length):>8}  "
                 f"{hs.trigram_count:>9}  "
-                f"{dcol(f'{density:.3f}'):>8}"
+                f"{dcol(f'{density:>8.3f}')}"
             )
         print()
         print(line)
@@ -183,7 +186,7 @@ def render_report(
                 f"0x{seg.end_a:08x}  "
                 f"0x{seg.start_b:08x}  "
                 f"0x{seg.end_b:08x}  "
-                f"{dcol(f'{seg.density:.3f}'):>8}"
+                f"{dcol(f'{seg.density:>8.3f}')}"
             )
         print()
         print(line)
@@ -218,6 +221,7 @@ def report_to_dict(report: SimilarityReport) -> dict:
             "unique_to_b": report.unique_trigrams_b - report.shared_trigrams,
         },
         "verdict": report.verdict,
+        "sampled_trigrams": report.sampled_trigrams,
         "hotspots": [
             {
                 "offset_a": h.offset_a,
@@ -260,10 +264,9 @@ def main() -> None:
         help="Number of hotspots to display (default: 10)",
     )
     parser.add_argument(
-        "--coverage", action="store_true", default=True,
-        help="Show coverage map (default: on)",
+        "--coverage", action=argparse.BooleanOptionalAction, default=True,
+        help="Show coverage map",
     )
-    parser.add_argument("--no-coverage", dest="coverage", action="store_false")
     parser.add_argument(
         "--window", type=int, default=256, metavar="SIZE",
         help="Analysis window size in bytes (default: 256)",
@@ -276,6 +279,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.window < 3:
+        parser.error("--window must be at least 3 (a trigram is 3 bytes)")
+    if args.threshold <= 0:
+        parser.error("--threshold must be positive")
+    if args.hotspots < 0:
+        parser.error("--hotspots must be non-negative")
+
     global USE_COLOR
     if args.no_color or not sys.stdout.isatty():
         USE_COLOR = False
@@ -284,8 +294,8 @@ def main() -> None:
     path_b = Path(args.file_b)
 
     for p in (path_a, path_b):
-        if not p.exists():
-            print(red(f"Error: file not found: {p}"), file=sys.stderr)
+        if not p.is_file():
+            print(red(f"Error: not a readable file: {p}"), file=sys.stderr)
             sys.exit(1)
 
     if not args.json:

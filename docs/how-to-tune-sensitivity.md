@@ -22,13 +22,15 @@ python3 trigram_compare.py --window 512 --threshold 0.5 file_a.bin file_b.bin
 
 ## Compare very large files
 
-For files over 100 MB, the inner loop in `_find_hotspots` can be slow if many low-entropy trigrams (e.g. `0x000000`) appear at thousands of offsets each. The implementation already skips trigrams whose cross-product exceeds 10,000 pairs. You can additionally raise `--window` to reduce grid resolution:
+For files over 100 MB, the inner loop in `_find_hotspots` can be slow if many low-entropy trigrams (e.g. `0x000000`) appear at thousands of offsets each. The implementation bounds this by subsampling trigrams whose cross-product exceeds 10,000 pairs (the report's `sampled_trigrams` field tells you how many were affected). You can additionally raise `--window` to reduce grid resolution:
 
 ```bash
 python3 trigram_compare.py --window 1024 firmware_a.bin firmware_b.bin
 ```
 
 The coverage window is automatically set to `4 × --window`, so raising `--window` also coarsens coverage segments.
+
+Memory: expect roughly 15–20 bytes of RAM per input byte for typical structured binaries (a 50 MB file indexes in ~500 MB). Files above 2 GiB are rejected — offsets are stored as 32-bit ints.
 
 ## Suppress the coverage map for faster output
 

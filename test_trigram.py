@@ -78,7 +78,8 @@ class TestIdenticalFiles(TrigramTestCase):
         data = self._rand(8192)
         r = self._compare(data, data, coverage_window=1024)
         for seg in r.coverage_segments:
-            self.assertLessEqual(seg.density, 1.0)
+            # Identical files: every window matches fully, exactly 1.0
+            self.assertEqual(seg.density, 1.0)
         for hs in r.hotspots:
             self.assertLessEqual(hs.trigram_count / hs.length, 1.0)
 

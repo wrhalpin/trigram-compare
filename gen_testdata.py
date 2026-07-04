@@ -25,7 +25,13 @@ def write(path: str, data: bytes) -> None:
 
 
 def make_base(size: int = 8192) -> bytes:
-    """Simulate a binary: PE-like header, code section, data section."""
+    """Simulate a binary: PE-like header, code section, data section.
+
+    Raises ValueError for sizes below 2048 bytes, where the fixed header and
+    string sections would not fit alongside the code section.
+    """
+    if size < 2048:
+        raise ValueError("size must be at least 2048 bytes")
     header = b"MZ" + bytes([0x90, 0x00, 0x03, 0x00]) + bytes(58)
     code_ops = [0x55, 0x89, 0xe5, 0x83, 0xec, 0x10, 0x8b, 0x45,
                 0xfc, 0x29, 0xc4, 0xc3, 0x90, 0xeb, 0x0a, 0x74]

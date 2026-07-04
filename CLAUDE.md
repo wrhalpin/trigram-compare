@@ -32,7 +32,7 @@ There is no build step or linter configured. The project is pure Python stdlib �
 Two modules; one is a pure library, the other is CLI glue:
 
 **`trigram_index.py`** — engine and data model, no I/O side effects
-- `TrigramIndex` — builds `dict[int, list[int]]` (trigram packed as 24-bit int → sorted byte offsets) via mmap. Call `.build()` then `.compare(other)`.
+- `TrigramIndex` — builds `dict[int, list[int]]` (trigram packed as 24-bit int → sorted byte offsets) from a single full read of the file. Call `.build()` then `.compare(other)`.
 - `compare()` computes Jaccard, cosine, and containment scores, then delegates to `_find_hotspots()` and `_build_coverage_map()`.
 - `_find_hotspots()` — grids all (offset_a, offset_b) pairs for shared trigrams into window-sized cells; dense cells become `Hotspot` objects. Counts *distinct A positions* per cell (density ≤ 1). Skips trigrams with >10,000 offset pairs to avoid O(n²) blowup.
 - `_build_coverage_map()` — slides a window over file A counting shared trigrams with multiset-min matching (each occurrence in the window matches at most as many occurrences as exist in B); produces `CoverageSegment` objects, then merges overlapping segments via `_merge_coverage_segments()`. A final tail window is always flush with EOF.

@@ -75,7 +75,7 @@ TrigramIndex(path: str | Path)
 **Methods**
 
 `build() -> TrigramIndex`  
-Reads the file via mmap, builds the internal trigram index. Must be called before `compare()`. Returns `self` for chaining: `TrigramIndex(path).build()`.
+Reads the entire file into memory and builds the internal trigram index. Must be called before `compare()`. Returns `self` for chaining: `TrigramIndex(path).build()`.
 
 `compare(other, hotspot_window=256, hotspot_min_density=0.25, coverage_window=1024, coverage_min_density=0.15) -> SimilarityReport`  
 Compares this index to `other`. Calls `build()` on either index if not yet built. Raises `ValueError` if a window is smaller than 3 bytes or a density threshold is not positive.

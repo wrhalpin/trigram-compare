@@ -8,7 +8,6 @@ Detects embedded code, polymorphism, and structural similarity via 3-byte ngrams
 
 from __future__ import annotations
 
-import mmap
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -110,10 +109,11 @@ class SimilarityReport:
 
 class TrigramIndex:
     """
-    Builds a trigram index for a binary file using memory-mapped I/O.
+    Builds a trigram index for a binary file.
 
-    Internally stores dict[int, list[int]]: trigram (3 bytes packed as int)
-    -> sorted list of byte offsets. Using int keys is ~2x faster than bytes keys.
+    The file is read fully into memory during build(). Internally stores
+    dict[int, list[int]]: trigram (3 bytes packed as int) -> sorted list of
+    byte offsets. Using int keys is ~2x faster than bytes keys.
     """
 
     def __init__(self, path: str | Path) -> None:
@@ -134,8 +134,7 @@ class TrigramIndex:
             return self
 
         with open(self.path, "rb") as fh:
-            with mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                data = mm[:]
+            data = fh.read()
 
         for i in range(len(data) - 2):
             key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]
@@ -214,7 +213,7 @@ class TrigramIndex:
         containment_ab = shared / len(keys_a) if keys_a else 0.0
         containment_ba = shared / len(keys_b) if keys_b else 0.0
 
-        cosine = self._cosine_similarity(other, intersection)
+        cosine = self._cosine_similarity(other, intersection, union)
         hotspots = self._find_hotspots(other, intersection, hotspot_window, hotspot_min_density)
         coverage = self._build_coverage_map(other, intersection, coverage_window, coverage_min_density)
 
@@ -240,12 +239,15 @@ class TrigramIndex:
     # Internal metric helpers
     # ------------------------------------------------------------------
 
-    def _cosine_similarity(self, other: TrigramIndex, shared_keys: set[int]) -> float:
+    def _cosine_similarity(
+        self, other: TrigramIndex, shared_keys: set[int], all_keys: set[int]
+    ) -> float:
         """Compute frequency-weighted cosine similarity over the full trigram vocabulary.
 
         Treats each file as a vector of trigram occurrence counts and returns the
-        normalised dot product.  Returns 0.0 when there are no shared trigrams or
-        either file is empty.
+        normalised dot product over *all_keys* (the union of both vocabularies,
+        already computed by compare()).  Returns 0.0 when there are no shared
+        trigrams or either file is empty.
         """
         if not shared_keys:
             return 0.0
@@ -254,7 +256,7 @@ class TrigramIndex:
         mag_a = 0.0
         mag_b = 0.0
 
-        for k in self.keys() | other.keys():
+        for k in all_keys:
             fa = len(self._index.get(k, []))
             fb = len(other._index.get(k, []))
             dot += fa * fb
@@ -323,9 +325,21 @@ class TrigramIndex:
         match at most as many occurrences as exist in all of B, so a single
         common trigram value (e.g. a null run) cannot saturate the window.
         Density is therefore always in [0, 1].
+
+        Runs in time linear in file size: a per-offset key table is built
+        once, so each window scans only its own byte range instead of every
+        shared key's full offset list.
         """
         if not shared_keys or self.size < window:
             return []
+
+        # Per-offset table of shared trigram keys (-1 = trigram not shared)
+        # and B-side occurrence counts, built once up front
+        key_at = [-1] * self.total_trigrams
+        for k in shared_keys:
+            for o in self._index[k]:
+                key_at[o] = k
+        b_count = {k: len(other._index[k]) for k in shared_keys}
 
         segments: list[CoverageSegment] = []
         step = window // 2
@@ -343,20 +357,23 @@ class TrigramIndex:
             # Only positions whose full trigram fits inside the window
             trigram_end = end_a - 2
 
-            local_shared = 0
-            best_b_offsets: list[int] = []
+            counts: dict[int, int] = defaultdict(int)
+            for o in range(start_a, trigram_end):
+                k = key_at[o]
+                if k >= 0:
+                    counts[k] += 1
 
-            for k in shared_keys:
-                a_offs = [o for o in self._index.get(k, []) if start_a <= o < trigram_end]
-                if a_offs:
-                    b_offs = other._index.get(k, [])
-                    local_shared += min(len(a_offs), len(b_offs))
-                    best_b_offsets.extend(b_offs)
+            if not counts:
+                continue
 
+            local_shared = sum(min(c, b_count[k]) for k, c in counts.items())
             total_in_window = max(1, window - 2)
             density = local_shared / total_in_window
 
-            if density >= min_density and best_b_offsets:
+            if density >= min_density:
+                best_b_offsets: list[int] = []
+                for k in counts:
+                    best_b_offsets.extend(other._index[k])
                 best_b_offsets.sort()
                 mid_b = best_b_offsets[len(best_b_offsets) // 2]
                 segments.append(CoverageSegment(

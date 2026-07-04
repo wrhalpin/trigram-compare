@@ -134,6 +134,43 @@ class TestHighFrequencySampling(TrigramTestCase):
         )
 
 
+class TestGridEquivalence(TrigramTestCase):
+    def test_counter_grid_matches_set_based_reference(self):
+        # The counter-based grid must produce cell counts identical to the
+        # brute-force approach of collecting distinct A positions per cell.
+        window = 256
+        shared_block = self._rand(600)
+        a = self._rand(1500) + shared_block + self._rand(1000)
+        b = self._rand(800) + shared_block + self._rand(1700)
+        pa, pb = self._file("ga.bin", a), self._file("gb.bin", b)
+        ia, ib = TrigramIndex(pa).build(), TrigramIndex(pb).build()
+
+        shared = [k for k in ia.keys() if len(ib.offsets(k)) > 0]
+
+        reference: dict = {}
+        for k in shared:
+            offs_a, offs_b = ia.offsets(k), ib.offsets(k)
+            if len(offs_a) * len(offs_b) > 10_000:
+                continue  # keep the reference simple: fixture stays below the budget
+            for oa in offs_a:
+                for ob in offs_b:
+                    reference.setdefault((oa // window, ob // window), set()).add(oa)
+
+        hotspots, _ = ia._find_hotspots(ib, shared, window, min_density=0.05)
+        expected = {
+            (ca, cb): len(s) for (ca, cb), s in reference.items()
+            if len(s) / window >= 0.05
+        }
+        actual = {
+            (h.offset_a // window, h.offset_b // window): h.trigram_count
+            for h in hotspots
+        }
+        # hotspots list is capped at 50; compare on the cells it reports
+        for cell, count in actual.items():
+            self.assertEqual(count, expected[cell])
+        self.assertGreater(len(actual), 0)
+
+
 class TestSegmentMerging(TrigramTestCase):
     def test_distinct_b_regions_stay_separate(self):
         # Bug regression: merging used to union B ranges of any A-overlapping

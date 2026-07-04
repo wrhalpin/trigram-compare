@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from array import array
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -232,12 +232,14 @@ class TrigramIndex:
         if not other._built:
             other.build()
 
-        # Dict views support set ops directly; the union is never
-        # materialized (|A ∪ B| = |A| + |B| - |A ∩ B|)
+        # The union is never materialized (|A ∪ B| = |A| + |B| - |A ∩ B|),
+        # and the intersection is a list of existing key objects (~8 bytes
+        # per entry) rather than a set (~60): consumers only iterate it.
         keys_a = self._index.keys()
         keys_b = other._index.keys()
 
-        intersection = keys_a & keys_b
+        index_b = other._index
+        intersection = [k for k in keys_a if k in index_b]
 
         shared = len(intersection)
         union_size = len(keys_a) + len(keys_b) - shared
@@ -272,7 +274,7 @@ class TrigramIndex:
     # Internal metric helpers
     # ------------------------------------------------------------------
 
-    def _cosine_similarity(self, other: TrigramIndex, shared_keys: set[int]) -> float:
+    def _cosine_similarity(self, other: TrigramIndex, shared_keys: Collection[int]) -> float:
         """Compute frequency-weighted cosine similarity over the full trigram vocabulary.
 
         Treats each file as a vector of trigram occurrence counts and returns
@@ -298,7 +300,7 @@ class TrigramIndex:
     def _find_hotspots(
         self,
         other: TrigramIndex,
-        shared_keys: set[int],
+        shared_keys: Collection[int],
         window: int,
         min_density: float,
     ) -> tuple[list[Hotspot], int]:
@@ -308,7 +310,11 @@ class TrigramIndex:
 
         Each cell counts *distinct A positions* matched to that B cell, so a
         substring repeated in both files cannot inflate the count beyond the
-        number of bytes actually shared, and density stays in [0, 1].
+        number of bytes actually shared, and density stays in [0, 1]. The
+        grid holds plain per-cell counters: an A position `oa` belongs in
+        cell (ca, cb) exactly when its trigram occurs anywhere in B window
+        cb, so incrementing once per (oa, distinct B cell of the trigram)
+        deduplicates by construction — no per-position storage needed.
 
         High-frequency trigrams whose offset cross-product exceeds the pair
         budget are subsampled (evenly strided, deterministic) rather than
@@ -319,7 +325,10 @@ class TrigramIndex:
         if not shared_keys:
             return [], 0
 
-        grid: dict[tuple[int, int], set[int]] = defaultdict(set)
+        # Cells are keyed by a single packed int (ca * ncols + cb) rather
+        # than a tuple: ~40% less memory per entry and faster hashing
+        ncols = other.size // window + 1
+        grid: dict[int, int] = defaultdict(int)
         sampled = 0
 
         for k in shared_keys:
@@ -331,14 +340,16 @@ class TrigramIndex:
                 sampled += 1
                 offsets_a = _sample_offsets(offsets_a)
                 offsets_b = _sample_offsets(offsets_b)
+            b_cells = {ob // window for ob in offsets_b}
             for oa in offsets_a:
-                for ob in offsets_b:
-                    grid[(oa // window, ob // window)].add(oa)
+                row = (oa // window) * ncols
+                for cb in b_cells:
+                    grid[row + cb] += 1
 
         hotspots: list[Hotspot] = []
-        for (ca, cb), matched in grid.items():
-            count = len(matched)
+        for cell, count in grid.items():
             if count / window >= min_density:
+                ca, cb = divmod(cell, ncols)
                 hotspots.append(Hotspot(
                     offset_a=ca * window,
                     offset_b=cb * window,
@@ -346,13 +357,14 @@ class TrigramIndex:
                     trigram_count=count,
                 ))
 
-        hotspots.sort(key=lambda h: h.trigram_count, reverse=True)
+        # Full tiebreak so ordering never depends on dict insertion order
+        hotspots.sort(key=lambda h: (-h.trigram_count, h.offset_a, h.offset_b))
         return hotspots[:50], sampled
 
     def _build_coverage_map(
         self,
         other: TrigramIndex,
-        shared_keys: set[int],
+        shared_keys: Collection[int],
         window: int,
         min_density: float,
     ) -> list[CoverageSegment]:

@@ -276,6 +276,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.window < 3:
+        parser.error("--window must be at least 3 (a trigram is 3 bytes)")
+    if args.threshold <= 0:
+        parser.error("--threshold must be positive")
+    if args.hotspots < 0:
+        parser.error("--hotspots must be non-negative")
+
     global USE_COLOR
     if args.no_color or not sys.stdout.isatty():
         USE_COLOR = False

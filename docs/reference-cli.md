@@ -20,8 +20,8 @@ python3 trigram_compare.py <file_a> <file_b> [options]
 | `--json` | off | Print a JSON object to stdout instead of the formatted report |
 | `--hotspots N` | 10 | Maximum number of hotspot rows to show in the table |
 | `--coverage` / `--no-coverage` | on | Show or hide the coverage map section |
-| `--window SIZE` | 256 | Window size in bytes used for both hotspot grid cells and the coverage map base unit. Coverage window is `4 × SIZE`. |
-| `--threshold FLOAT` | 0.25 | Minimum trigram density (`count / window`) for a cell to become a hotspot. Coverage threshold is `0.6 × FLOAT`. |
+| `--window SIZE` | 256 | Window size in bytes used for both hotspot grid cells and the coverage map base unit. Coverage window is `4 × SIZE`. Must be at least 3. |
+| `--threshold FLOAT` | 0.25 | Minimum trigram density (`count / window`) for a cell to become a hotspot. Coverage threshold is `0.6 × FLOAT`. Must be positive. |
 | `--no-color` | off | Disable ANSI escape codes. Also disabled automatically when stdout is not a TTY. |
 
 ### Exit codes
@@ -30,6 +30,7 @@ python3 trigram_compare.py <file_a> <file_b> [options]
 |---|---|
 | 0 | Analysis completed (any verdict) |
 | 1 | One or both input files not found |
+| 2 | Invalid arguments (e.g. `--window` below 3, non-positive `--threshold`) |
 
 ### JSON output schema
 
@@ -77,7 +78,7 @@ TrigramIndex(path: str | Path)
 Reads the file via mmap, builds the internal trigram index. Must be called before `compare()`. Returns `self` for chaining: `TrigramIndex(path).build()`.
 
 `compare(other, hotspot_window=256, hotspot_min_density=0.25, coverage_window=1024, coverage_min_density=0.15) -> SimilarityReport`  
-Compares this index to `other`. Calls `build()` on either index if not yet built.
+Compares this index to `other`. Calls `build()` on either index if not yet built. Raises `ValueError` if a window is smaller than 3 bytes or a density threshold is not positive.
 
 `offsets(trigram: bytes | int) -> list[int]`  
 Returns the sorted list of byte offsets where `trigram` occurs in the file. Accepts a 3-byte `bytes` object or a pre-packed `int`.
@@ -122,7 +123,7 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `jaccard >= 0.85` | `NEAR-IDENTICAL` |
 | `jaccard >= 0.50` | `HIGHLY SIMILAR` |
 | `containment_a_in_b >= 0.70` or `containment_b_in_a >= 0.70` | `EMBEDDED CONTENT LIKELY` |
-| `hotspots[0].trigram_count >= 64` | `SHARED CODE REGION DETECTED` |
+| `hotspots[0].trigram_count >= 64` and `trigram_count × 4 >= length` | `SHARED CODE REGION DETECTED` |
 | `jaccard >= 0.15` | `MODERATE SIMILARITY` |
 | `jaccard >= 0.05` | `LOW SIMILARITY` |
 | otherwise | `DISSIMILAR` |
@@ -136,9 +137,9 @@ Dataclass returned by `TrigramIndex.compare()`.
 | `offset_a` | `int` | Start of the matching window in file A |
 | `offset_b` | `int` | Start of the matching window in file B |
 | `length` | `int` | Window size in bytes (equals `hotspot_window`) |
-| `trigram_count` | `int` | Number of shared trigrams in this cell |
+| `trigram_count` | `int` | Number of *distinct positions* in this A window whose trigram also occurs in the corresponding B window |
 
-Density = `trigram_count / length`.
+Density = `trigram_count / length`, always in `[0, 1]`. Repeated substrings do not inflate the count: each A position is counted once per cell regardless of how many B occurrences it matches.
 
 ---
 
@@ -148,6 +149,6 @@ Density = `trigram_count / length`.
 |---|---|---|
 | `start_a`, `end_a` | `int` | Byte range in file A |
 | `start_b`, `end_b` | `int` | Corresponding byte range in file B (median-anchored approximation) |
-| `density` | `float` | Peak density within the merged segment |
+| `density` | `float` | Peak density within the merged segment, in `[0, 1]`. Multiset-based: each trigram occurrence in the A window matches at most as many occurrences as exist in B, so one common trigram value cannot saturate a window. |
 | `size_a` | `int` (property) | `end_a - start_a` |
 | `size_b` | `int` (property) | `end_b - start_b` |

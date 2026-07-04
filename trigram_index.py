@@ -78,10 +78,15 @@ class SimilarityReport:
           jaccard >= 0.85  -> NEAR-IDENTICAL
           jaccard >= 0.50  -> HIGHLY SIMILAR
           containment >= 0.70 (either direction) -> EMBEDDED CONTENT LIKELY
-          hotspots[0].trigram_count >= 64 -> SHARED CODE REGION DETECTED
+          hotspots[0] has >= 64 matched positions covering >= 1/4 of its
+            window -> SHARED CODE REGION DETECTED
           jaccard >= 0.15  -> MODERATE SIMILARITY
           jaccard >= 0.05  -> LOW SIMILARITY
           otherwise        -> DISSIMILAR
+
+        The shared-code check scales with window size so that 64 matches in
+        a 256-byte window and 256 matches in a 1024-byte window carry the
+        same weight; windows smaller than 256 bytes cannot trigger it.
         """
         j = self.jaccard
         ca = self.containment_a_in_b
@@ -92,8 +97,10 @@ class SimilarityReport:
             return "HIGHLY SIMILAR"
         if ca >= 0.70 or cb >= 0.70:
             return "EMBEDDED CONTENT LIKELY"
-        if self.hotspots and self.hotspots[0].trigram_count >= 64:
-            return "SHARED CODE REGION DETECTED"
+        if self.hotspots:
+            top = self.hotspots[0]
+            if top.trigram_count >= 64 and top.trigram_count * 4 >= top.length:
+                return "SHARED CODE REGION DETECTED"
         if j >= 0.15:
             return "MODERATE SIMILARITY"
         if j >= 0.05:
@@ -180,7 +187,17 @@ class TrigramIndex:
         coverage_window: int = 1024,
         coverage_min_density: float = 0.15,
     ) -> SimilarityReport:
-        """Full comparison between this index and another. Returns a SimilarityReport."""
+        """Full comparison between this index and another. Returns a SimilarityReport.
+
+        Raises:
+            ValueError: If a window is smaller than 3 bytes (a trigram cannot
+                fit) or a density threshold is not positive.
+        """
+        if hotspot_window < 3 or coverage_window < 3:
+            raise ValueError("window sizes must be at least 3 bytes (trigram width)")
+        if hotspot_min_density <= 0 or coverage_min_density <= 0:
+            raise ValueError("density thresholds must be positive")
+
         if not self._built:
             self.build()
         if not other._built:
@@ -257,11 +274,15 @@ class TrigramIndex:
         """
         Bucket (offset_a, offset_b) pairs for each shared trigram into a grid
         of window-sized cells. Dense cells become Hotspot objects.
+
+        Each cell counts *distinct A positions* matched to that B cell, so a
+        substring repeated in both files cannot inflate the count beyond the
+        number of bytes actually shared, and density stays in [0, 1].
         """
         if not shared_keys:
             return []
 
-        grid: dict[tuple[int, int], int] = defaultdict(int)
+        grid: dict[tuple[int, int], set[int]] = defaultdict(set)
 
         for k in shared_keys:
             offsets_a = self._index[k]
@@ -271,10 +292,11 @@ class TrigramIndex:
                 continue
             for oa in offsets_a:
                 for ob in offsets_b:
-                    grid[(oa // window, ob // window)] += 1
+                    grid[(oa // window, ob // window)].add(oa)
 
         hotspots: list[Hotspot] = []
-        for (ca, cb), count in grid.items():
+        for (ca, cb), matched in grid.items():
+            count = len(matched)
             if count / window >= min_density:
                 hotspots.append(Hotspot(
                     offset_a=ca * window,
@@ -296,6 +318,11 @@ class TrigramIndex:
         """
         Slide a window over file A and compute what fraction of its trigrams
         appear anywhere in file B. High-density windows become CoverageSegments.
+
+        Matching is multiset-based: each trigram occurrence in the window can
+        match at most as many occurrences as exist in all of B, so a single
+        common trigram value (e.g. a null run) cannot saturate the window.
+        Density is therefore always in [0, 1].
         """
         if not shared_keys or self.size < window:
             return []
@@ -303,19 +330,30 @@ class TrigramIndex:
         segments: list[CoverageSegment] = []
         step = window // 2
 
-        for start_a in range(0, self.size - window, step):
+        # Window starts at every `step`, plus a final window flush with EOF so
+        # the tail of the file is always examined (size == window gives one
+        # window at offset 0)
+        last_start = self.size - window
+        starts = list(range(0, last_start + 1, step))
+        if starts[-1] != last_start:
+            starts.append(last_start)
+
+        for start_a in starts:
             end_a = start_a + window
+            # Only positions whose full trigram fits inside the window
+            trigram_end = end_a - 2
 
             local_shared = 0
             best_b_offsets: list[int] = []
 
             for k in shared_keys:
-                a_offs = [o for o in self._index.get(k, []) if start_a <= o < end_a]
+                a_offs = [o for o in self._index.get(k, []) if start_a <= o < trigram_end]
                 if a_offs:
-                    local_shared += len(a_offs)
-                    best_b_offsets.extend(other._index.get(k, []))
+                    b_offs = other._index.get(k, [])
+                    local_shared += min(len(a_offs), len(b_offs))
+                    best_b_offsets.extend(b_offs)
 
-            total_in_window = max(1, end_a - start_a - 2)
+            total_in_window = max(1, window - 2)
             density = local_shared / total_in_window
 
             if density >= min_density and best_b_offsets:

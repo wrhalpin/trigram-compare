@@ -65,13 +65,15 @@ The scalar metrics summarize the whole file. The spatial analysis answers a diff
 
 For each shared trigram, every (offset_in_A, offset_in_B) pair is bucketed into a grid cell of size `window × window`. A dense cell means the same trigrams appear at similar relative positions in both files — a sign of copied or transplanted code.
 
-The density of a cell is `count / window`. The default threshold of 0.25 means at least one shared trigram per 4 bytes on average across the window.
+Each cell counts *distinct A positions* that matched, not raw offset pairs. This matters for repeated content: if a string occurs twice in each file, every one of its trigrams produces four offset pairs, but each A position is still only counted once. Density is `count / window` and always falls in [0, 1]; the default threshold of 0.25 means at least one matched position per 4 bytes across the window.
 
 High-frequency trigrams (more than 10,000 offset combinations) are skipped to prevent O(n²) blowup. This means very common byte patterns like `\x00\x00\x00` do not contribute to hotspots even if they are theoretically shared.
 
 ### Coverage map (file-A perspective)
 
-The coverage map slides a window over file A and asks: "what fraction of the trigrams in this window appear anywhere in file B?" It is a coarser, one-dimensional view compared to hotspots.
+The coverage map slides a window over file A and asks: "what fraction of the trigrams in this window appear anywhere in file B?" It is a coarser, one-dimensional view compared to hotspots. A final window is always placed flush with the end of file A, so the tail is examined even when the file size is not a multiple of the step.
+
+Matching is multiset-based: each trigram occurrence in the window can match at most as many occurrences as exist in all of B. Without this rule, a single common trigram value — a null run in A matched against one incidental null trigram in B — would saturate the window and report a full-density "match" between dissimilar files.
 
 The B-side position reported for each segment is an approximation: the median offset of all B-side occurrences of the shared trigrams. For an exactly aligned region this median converges to the true alignment offset; for scattered matches it is less precise.
 
@@ -81,7 +83,7 @@ The verdict is a convenience classification. The thresholds are heuristics tuned
 
 - **NEAR-IDENTICAL** / **HIGHLY SIMILAR**: global Jaccard dominates; the files are structurally the same.
 - **EMBEDDED CONTENT LIKELY**: asymmetric containment signals that one file's content lives inside the other.
-- **SHARED CODE REGION DETECTED**: Jaccard is low but a single hotspot has at least 64 shared trigrams — a localized match in otherwise different files.
+- **SHARED CODE REGION DETECTED**: Jaccard is low but the top hotspot has at least 64 matched positions covering at least a quarter of its window — a localized match in otherwise different files. The quarter-window requirement scales the check with `--window`, so a fixed 64 matches is not treated as significant inside a large window. Windows smaller than 256 bytes cannot trigger this verdict.
 - **MODERATE / LOW / DISSIMILAR**: falling-through levels of the Jaccard scale.
 
 Because verdicts are evaluated in order, a file pair can only receive one label even if multiple conditions are true. When building automated pipelines, inspect the raw metrics rather than relying solely on the verdict string.

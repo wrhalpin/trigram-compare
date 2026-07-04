@@ -30,6 +30,8 @@ python3 trigram_compare.py --window 1024 firmware_a.bin firmware_b.bin
 
 The coverage window is automatically set to `4 × --window`, so raising `--window` also coarsens coverage segments.
 
+Memory: expect roughly 15–20 bytes of RAM per input byte for typical structured binaries (a 50 MB file indexes in ~500 MB). Files above 2 GiB are rejected — offsets are stored as 32-bit ints.
+
 ## Suppress the coverage map for faster output
 
 Coverage map computation slides a window over the entire file A. Disable it when you only need the scalar metrics and hotspots:

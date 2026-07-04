@@ -9,7 +9,9 @@ Detects embedded code, polymorphism, and structural similarity via 3-byte ngrams
 from __future__ import annotations
 
 import os
+from array import array
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -117,7 +119,7 @@ _HOTSPOT_PAIR_BUDGET = 10_000
 _HOTSPOT_SAMPLE_CAP = 100
 
 
-def _sample_offsets(offs: list[int], cap: int = _HOTSPOT_SAMPLE_CAP) -> list[int]:
+def _sample_offsets(offs: Sequence[int], cap: int = _HOTSPOT_SAMPLE_CAP) -> Sequence[int]:
     """Deterministically subsample *offs* to at most *cap* evenly-strided entries."""
     n = len(offs)
     if n <= cap:
@@ -131,14 +133,16 @@ class TrigramIndex:
     Builds a trigram index for a binary file.
 
     The file is read fully into memory during build(). Internally stores
-    dict[int, list[int]]: trigram (3 bytes packed as int) -> sorted list of
-    byte offsets. Using int keys is ~2x faster than bytes keys.
+    dict[int, array('i')]: trigram (3 bytes packed as int) -> sorted byte
+    offsets in a compact 4-byte-per-entry array. Using int keys is ~2x
+    faster than bytes keys; array postings use ~9x less memory than lists
+    of boxed ints. Files are limited to 2 GiB so offsets fit 32 bits.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.size: int = 0
-        self._index: dict[int, list[int]] = defaultdict(list)
+        self._index: dict[int, array] = defaultdict(lambda: array("i"))
         self._built = False
 
     # ------------------------------------------------------------------
@@ -146,8 +150,15 @@ class TrigramIndex:
     # ------------------------------------------------------------------
 
     def build(self) -> TrigramIndex:
-        """Scan the file and populate the trigram index."""
+        """Scan the file and populate the trigram index.
+
+        Raises:
+            ValueError: If the file exceeds 2 GiB (offsets are stored as
+                32-bit ints).
+        """
         self.size = os.path.getsize(self.path)
+        if self.size > 2**31 - 1:
+            raise ValueError("files larger than 2 GiB are not supported")
         if self.size < 3:
             self._built = True
             return self
@@ -187,7 +198,7 @@ class TrigramIndex:
             key = (trigram[0] << 16) | (trigram[1] << 8) | trigram[2]
         else:
             key = trigram
-        return self._index.get(key, [])
+        return list(self._index.get(key, ()))
 
     def keys(self) -> set[int]:
         """Return the set of all unique trigrams in the file as packed 24-bit ints."""
@@ -221,18 +232,20 @@ class TrigramIndex:
         if not other._built:
             other.build()
 
-        keys_a = self.keys()
-        keys_b = other.keys()
+        # Dict views support set ops directly; the union is never
+        # materialized (|A ∪ B| = |A| + |B| - |A ∩ B|)
+        keys_a = self._index.keys()
+        keys_b = other._index.keys()
 
         intersection = keys_a & keys_b
-        union = keys_a | keys_b
 
         shared = len(intersection)
-        jaccard = shared / len(union) if union else 0.0
+        union_size = len(keys_a) + len(keys_b) - shared
+        jaccard = shared / union_size if union_size else 0.0
         containment_ab = shared / len(keys_a) if keys_a else 0.0
         containment_ba = shared / len(keys_b) if keys_b else 0.0
 
-        cosine = self._cosine_similarity(other, intersection, union)
+        cosine = self._cosine_similarity(other, intersection)
         hotspots, sampled = self._find_hotspots(other, intersection, hotspot_window, hotspot_min_density)
         coverage = self._build_coverage_map(other, intersection, coverage_window, coverage_min_density)
 
@@ -259,29 +272,25 @@ class TrigramIndex:
     # Internal metric helpers
     # ------------------------------------------------------------------
 
-    def _cosine_similarity(
-        self, other: TrigramIndex, shared_keys: set[int], all_keys: set[int]
-    ) -> float:
+    def _cosine_similarity(self, other: TrigramIndex, shared_keys: set[int]) -> float:
         """Compute frequency-weighted cosine similarity over the full trigram vocabulary.
 
-        Treats each file as a vector of trigram occurrence counts and returns the
-        normalised dot product over *all_keys* (the union of both vocabularies,
-        already computed by compare()).  Returns 0.0 when there are no shared
-        trigrams or either file is empty.
+        Treats each file as a vector of trigram occurrence counts and returns
+        the normalised dot product. Keys outside the intersection contribute
+        zero to the dot product, so it is summed over *shared_keys* only;
+        each magnitude iterates its own side once. Mathematically identical
+        to iterating the full union, without materializing it. Returns 0.0
+        when there are no shared trigrams or either file is empty.
         """
         if not shared_keys:
             return 0.0
 
         dot = 0.0
-        mag_a = 0.0
-        mag_b = 0.0
+        for k in shared_keys:
+            dot += len(self._index[k]) * len(other._index[k])
 
-        for k in all_keys:
-            fa = len(self._index.get(k, []))
-            fb = len(other._index.get(k, []))
-            dot += fa * fb
-            mag_a += fa * fa
-            mag_b += fb * fb
+        mag_a = sum(len(v) ** 2 for v in self._index.values())
+        mag_b = sum(len(v) ** 2 for v in other._index.values())
 
         denom = (mag_a ** 0.5) * (mag_b ** 0.5)
         return dot / denom if denom else 0.0
@@ -364,8 +373,9 @@ class TrigramIndex:
             return []
 
         # Per-offset table of shared trigram keys (-1 = trigram not shared)
-        # and B-side occurrence counts, built once up front
-        key_at = [-1] * self.total_trigrams
+        # and B-side occurrence counts, built once up front. array('i') keeps
+        # this at 4 bytes per file byte instead of an 8-byte pointer per slot.
+        key_at = array("i", b"\xff\xff\xff\xff" * self.total_trigrams)
         for k in shared_keys:
             for o in self._index[k]:
                 key_at[o] = k

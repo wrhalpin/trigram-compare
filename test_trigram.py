@@ -177,6 +177,37 @@ class TestValidation(TrigramTestCase):
             self._compare(data, data, hotspot_min_density=0)
 
 
+class TestIndexAccessors(TrigramTestCase):
+    def test_offsets_returns_sorted_positions(self):
+        p = self._file("x.bin", b"ABCABCABe")
+        idx = TrigramIndex(p).build()
+        self.assertEqual(idx.offsets(b"ABC"), [0, 3])
+        self.assertEqual(idx.offsets(b"BCA"), [1, 4])
+        self.assertEqual(idx.offsets(b"ZZZ"), [])
+        self.assertEqual(idx.total_trigrams, 7)
+        self.assertIsInstance(idx.offsets(b"ABC"), list)
+
+    def test_cosine_matches_direct_computation(self):
+        # The optimised cosine (shared-keys dot product, per-side magnitudes)
+        # must equal the naive full-union formula.
+        a_data = self._rand(4096) + bytes(512)
+        b_data = self._rand(2048) + a_data[:2048]
+        pa = self._file("ca.bin", a_data)
+        pb = self._file("cb.bin", b_data)
+        ia, ib = TrigramIndex(pa).build(), TrigramIndex(pb).build()
+        r = ia.compare(ib)
+
+        all_keys = ia.keys() | ib.keys()
+        dot = mag_a = mag_b = 0.0
+        for k in all_keys:
+            fa, fb = len(ia.offsets(k)), len(ib.offsets(k))
+            dot += fa * fb
+            mag_a += fa * fa
+            mag_b += fb * fb
+        expected = dot / ((mag_a ** 0.5) * (mag_b ** 0.5))
+        self.assertAlmostEqual(r.cosine, expected, places=12)
+
+
 class TestTinyFiles(TrigramTestCase):
     def test_file_smaller_than_trigram(self):
         r = self._compare(b"ab", b"ab")

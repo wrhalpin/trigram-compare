@@ -154,6 +154,10 @@ def render_report(
         note = f"  (top {min(show_hotspots, len(report.hotspots))} dense matching regions)"
         if report.sampled_trigrams:
             note += f"  ({report.sampled_trigrams} high-frequency trigrams sampled)"
+        if report.hotspot_analysis == "budget_scaled":
+            note += "  (sampling scaled to input size)"
+        elif report.hotspot_analysis == "near_identical_sample":
+            note += "  (sparse sample — files are near-identical)"
         print(bold("HOTSPOTS") + dim(note))
         print()
         print(f"  {'#':>3}  {'Offset A':>10}  {'Offset B':>10}  {'~Size':>8}  {'Trigrams':>9}  {'Density':>8}")
@@ -222,6 +226,7 @@ def report_to_dict(report: SimilarityReport) -> dict:
         },
         "verdict": report.verdict,
         "sampled_trigrams": report.sampled_trigrams,
+        "hotspot_analysis": report.hotspot_analysis,
         "hotspots": [
             {
                 "offset_a": h.offset_a,
